@@ -389,6 +389,167 @@ static int markdown_raw_requested(
     return 0;
 }
 
+/*
+ * Returns true if query-string component is the configured raw parameter.
+ *
+ * Recognizes:
+ *
+ *     raw
+ *     raw=
+ *     raw=1
+ *     raw=true
+ *
+ * This function is used for URL construction only. Your existing
+ * representation-selection logic can continue deciding exactly which
+ * values force raw mode.
+ */
+static int markdown_is_raw_query_parameter(
+    const char *component,
+    apr_size_t len,
+    const char *raw_parameter)
+{
+    apr_size_t name_len;
+
+    if (!component || !raw_parameter || !*raw_parameter)
+        return 0;
+
+    name_len = strlen(raw_parameter);
+
+    if (len < name_len)
+        return 0;
+
+    if (strncmp(component, raw_parameter, name_len) != 0)
+        return 0;
+
+    return len == name_len || component[name_len] == '=';
+}
+
+
+/*
+ * Build the query string for an alternate representation.
+ *
+ * All existing parameters are preserved except the configured raw
+ * parameter.
+ *
+ * If want_raw is non-zero, raw_parameter=1 is appended.
+ *
+ * Returned string does NOT include the leading '?'.
+ */
+static const char *markdown_build_alternate_args(
+    request_rec *r,
+    const char *raw_parameter,
+    int want_raw)
+{
+    apr_array_header_t *parts;
+    const char *p;
+    const char *start;
+
+    parts = apr_array_make(r->pool, 4, sizeof(const char *));
+
+    if (r->args && *r->args) {
+        start = r->args;
+        p = start;
+
+        for (;;) {
+            if (*p == '&' || *p == '\0') {
+                apr_size_t len = (apr_size_t)(p - start);
+
+                if (len > 0 &&
+                    !markdown_is_raw_query_parameter(
+                        start,
+                        len,
+                        raw_parameter)) {
+
+                    const char **slot =
+                        (const char **)apr_array_push(parts);
+
+                    *slot = apr_pstrndup(r->pool, start, len);
+                }
+
+                if (*p == '\0')
+                    break;
+
+                start = p + 1;
+            }
+
+            ++p;
+        }
+    }
+
+    if (want_raw && raw_parameter && *raw_parameter) {
+        const char **slot =
+            (const char **)apr_array_push(parts);
+
+        *slot = apr_pstrcat(
+            r->pool,
+            raw_parameter,
+            "=1",
+            NULL);
+    }
+
+    if (parts->nelts == 0)
+        return NULL;
+
+    return apr_array_pstrcat(r->pool, parts, '&');
+}
+
+
+/*
+ * Advertise the alternate representation using RFC 8288 Link.
+ *
+ * HTML:
+ *     Link: </foo.md?raw=1>;
+ *           rel="alternate";
+ *           type="text/markdown"
+ *
+ * Markdown:
+ *     Link: </foo.md>;
+ *           rel="alternate";
+ *           type="text/html"
+ */
+static void markdown_set_alternate_link(
+    request_rec *r,
+    const markdown_dir_config *cfg,
+    int html_representation)
+{
+    const char *args;
+    const char *target;
+    const char *value;
+
+    /*
+     * When sending HTML, construct a URL which explicitly forces
+     * Markdown.
+     *
+     * When sending Markdown, remove the raw parameter so that a normal
+     * browser request can receive HTML.
+     */
+    args = markdown_build_alternate_args(
+        r,
+        cfg->raw_parameter,
+        html_representation ? 1 : 0);
+
+    if (args && *args) {
+        target = apr_pstrcat(
+            r->pool,
+            r->uri,
+            "?",
+            args,
+            NULL);
+    }
+    else {
+        target = r->uri;
+    }
+
+    value = apr_psprintf(
+        r->pool,
+        "<%s>; rel=\"alternate\"; type=\"%s\"",
+        target,
+        html_representation
+            ? "text/markdown"
+            : "text/html");
+
+    apr_table_setn(r->headers_out, "Link", value);
+}
 
 /*
  * ==========================================================================
@@ -1222,6 +1383,14 @@ static int markdown_handler(
             r,
             "text/markdown; charset=utf-8");
     }
+
+    /*
+     * Advertise the other available representation.
+     */
+    markdown_set_alternate_link(
+        r,
+        config,
+        html);
 
     /*
      * Populate:
