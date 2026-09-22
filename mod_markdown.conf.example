@@ -1,0 +1,13 @@
+LoadModule markdown_module modules/mod_markdown.so
+
+<FilesMatch "\\.md$">
+    SetHandler markdown
+    MarkdownHtml On
+    MarkdownFullDocument On
+    MarkdownRawLink On
+    MarkdownRawParameter raw
+    MarkdownTitleFromH1 On
+    MarkdownPreprocessor frontmatter
+    # MarkdownStylesheet /assets/markdown.css
+    MarkdownMaxSize 2097152
+</FilesMatch>
