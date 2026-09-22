@@ -1,4 +1,4 @@
-# mod_markdown 1.1.0
+# mod_markdown 1.1.1
 
 Apache 2.4 Markdown handler backed by libcmark-gfm. Version 1.1 publishes an
 in-memory renderer so other modules can render authorized or generated
